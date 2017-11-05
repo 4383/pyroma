@@ -16,6 +16,7 @@
 #                 False for fail and None for not applicable (meaning it will
 #                 not be counted).
 
+import inspect
 import re
 from docutils.core import publish_parts
 from docutils.utils import SystemMessage
@@ -175,11 +176,56 @@ class LongDescription(BaseTest):
 class Classifiers(FieldTest):
     weight = 100
     field = 'classifiers'
-
-
-class PythonVersion(BaseTest):
+    ignore = ['test', 'message']
+    messages = []
 
     def test(self, data):
+        response = True
+        if not super(Classifiers, self).test(data):
+            self.messages.append(
+                "Your package does not have %s data" % self.field
+            )
+            return False
+        methods = inspect.getmembers(Classifiers, predicate=inspect.ismethod)
+        tests = []
+        for method in methods:
+            if method[0] not in self.ignore:
+                if not method[1](self, data):
+                    response = False
+        return response
+
+    def development_status(self, data):
+        available_status = [
+            '1 - Planning',
+            '2 - Pre-Alpha',
+            '3 - Alpha',
+            '4 - Beta',
+            '5 - Production/Stable',
+            '6 - Mature',
+            '7 - Inactive',
+        ]
+
+        classifiers = data.get('classifiers', [])
+        for classifier in classifiers:
+            try:
+                keyword, status = [p.strip() for p in classifier.split('::')]
+                if keyword != 'Development Status':
+                    continue
+                if status not in available_status:
+                    self.messages.append(
+                        'The classifiers should specify a valid '\
+                        'development status'
+                    )
+                    return False
+                return True
+            except ValueError:
+                continue
+        self.messages.append(
+            'The classifiers should specify development status'
+        )
+        return False
+
+    def python_version(self, data):
         self._major_version_specified = False
 
         classifiers = data.get('classifiers', [])
@@ -202,7 +248,6 @@ class PythonVersion(BaseTest):
                     # something like "2.7" or "3.3" but not just "2" or "3".
                     # This is a good specification, and we only need one.
                     # Set weight to 100 and finish.
-                    self.weight = 100
                     return True
 
                 # It's a valid int, meaning it specified "2" or "3".
@@ -211,17 +256,18 @@ class PythonVersion(BaseTest):
         # There was some sort of failure:
         if self._major_version_specified:
             # Python 2 or 3 was specified but no more detail than that:
-            self.weight = 25
+            self.messages.append(
+                "The classifiers should specify what minor versions of "\
+                "Python you support as well as what major version.")
         else:
             # No Python version specified at all:
-            self.weight = 100
+            self.messages.append(
+                "You should specify classifiers in your."
+            )
         return False
 
     def message(self):
-        if self._major_version_specified:
-            return "The classifiers should specify what minor versions of "\
-                   "Python you support as well as what major version."
-        return "You should specify what Python versions you support."
+        return self.messages
 
 
 class Keywords(FieldTest):
@@ -342,7 +388,6 @@ ALL_TESTS = [
     Description(),
     LongDescription(),
     Classifiers(),
-    PythonVersion(),
     Keywords(),
     Author(),
     AuthorEmail(),
@@ -367,7 +412,11 @@ def rate(data):
     for test in ALL_TESTS:
         res = test.test(data)
         if res is False:
-            fails.append(test.message())
+            message = test.message()
+            if type(message) is str:
+                fails.append(test.message())
+            elif type(message) is list:
+                fails.extend(message)
             if test.fatal:
                 fatality = True
             else:
